@@ -6,7 +6,6 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
-# ── Config ──────────────────────────────────────────
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 DB_DSN = (
@@ -16,7 +15,7 @@ DB_DSN = (
 )
 
 CSV_DIR = Path(os.getenv("CSV_DIR", "."))
-CHUNK_SIZE = 50_000                        # rows per DB write batch
+CHUNK_SIZE = 50_000                       
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,10 +24,6 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-
-# ─────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────
 def read_csv(filename: str, **kwargs) -> pd.DataFrame:
     path = CSV_DIR / filename
     log.info(f"Reading {path} …")
@@ -64,10 +59,6 @@ def upsert(df: pd.DataFrame, table: str, engine, conflict_cols: list[str]) -> No
 
     log.info(f"  ✓ {table} loaded")
 
-
-# ─────────────────────────────────────────────
-# Extract
-# ─────────────────────────────────────────────
 def extract() -> dict[str, pd.DataFrame]:
     return {
         "players":      read_csv("players.csv"),
@@ -79,10 +70,6 @@ def extract() -> dict[str, pd.DataFrame]:
     }
 
 
-# ─────────────────────────────────────────────
-# Transform helpers
-# ─────────────────────────────────────────────
-
 def get_extra_clubs(games_raw: pd.DataFrame, existing_club_ids: set) -> pd.DataFrame:
     """Build stub rows for clubs that appear in games but not in clubs.csv."""
     home = games_raw[["home_club_id", "home_club_name"]].rename(
@@ -93,9 +80,7 @@ def get_extra_clubs(games_raw: pd.DataFrame, existing_club_ids: set) -> pd.DataF
     extra = pd.concat([home, away], ignore_index=True)
     extra["club_id"] = pd.to_numeric(extra["club_id"], errors="coerce")
     extra = extra.dropna(subset=["club_id"]).drop_duplicates("club_id")
-    extra["country"] = None  # unknown
-
-    # Keep only clubs missing from dim_clubs
+    extra["country"] = None  
     return extra[~extra["club_id"].isin(existing_club_ids)]
 
 def get_extra_players(appearances_raw: pd.DataFrame, existing_player_ids: set) -> pd.DataFrame:
@@ -105,7 +90,6 @@ def get_extra_players(appearances_raw: pd.DataFrame, existing_player_ids: set) -
     df["player_id"] = pd.to_numeric(df["player_id"], errors="coerce")
     df = df.dropna(subset=["player_id"]).drop_duplicates("player_id")
 
-    # Fill missing required columns with None
     df["birth_date"]   = None
     df["position"]     = None
     df["nationality"]  = None
@@ -127,7 +111,7 @@ def build_dim_date(date_series_list: list[pd.Series]) -> pd.DataFrame:
             "day":         dt.day,
             "week":        dt.isocalendar().week.values,
             "quarter":     dt.quarter,
-            "day_of_week": dt.dayofweek,   # Monday=0, Sunday=6
+            "day_of_week": dt.dayofweek,  
         }
     )
     return df.drop_duplicates("date_id").sort_values("date_id").reset_index(drop=True)
@@ -145,7 +129,6 @@ def transform_dim_competitions(competitions_raw: pd.DataFrame, id_map: dict) -> 
 
 
 def transform_dim_clubs(clubs_raw: pd.DataFrame, competitions_raw: pd.DataFrame) -> pd.DataFrame:
-    # Look up country via domestic_competition_id
     comp_country = competitions_raw[["competition_id", "country_name"]].drop_duplicates()
     df = clubs_raw[["club_id", "name", "domestic_competition_id"]].copy()
     df = df.merge(comp_country, left_on="domestic_competition_id",
@@ -170,7 +153,7 @@ def transform_dim_players(players_raw: pd.DataFrame) -> pd.DataFrame:
         inplace=True,
     )
     df["birth_date"] = pd.to_datetime(df["birth_date"], errors="coerce").dt.date
-    df["birth_date"] = df["birth_date"].where(df["birth_date"].notna(), other=None)  # ← add this
+    df["birth_date"] = df["birth_date"].where(df["birth_date"].notna(), other=None)  
     df["player_id"]  = pd.to_numeric(df["player_id"], errors="coerce")
     return df.dropna(subset=["player_id"]).drop_duplicates("player_id")
 
@@ -203,7 +186,7 @@ def transform_fact_matches(games_raw: pd.DataFrame, id_map: dict, valid_club_ids
         },
         inplace=True,
     )
-    df["competition_id"] = df["competition_id"].map(id_map)  # ← apply same map
+    df["competition_id"] = df["competition_id"].map(id_map)   
     df["date_id"]        = pd.to_datetime(df["date_id"], errors="coerce").dt.date
     df["match_id"]       = pd.to_numeric(df["match_id"],      errors="coerce")
     df["home_club_id"]   = pd.to_numeric(df["home_club_id"],  errors="coerce")
@@ -257,18 +240,12 @@ def transform_fact_player_valuations(valuations_raw: pd.DataFrame, valid_player_
 
     return df.dropna(subset=["player_id", "date_id"]).drop_duplicates(["player_id", "date_id"])
 
-
-# ─────────────────────────────────────────────
-# Main ETL
-# ─────────────────────────────────────────────
 def run_etl() -> None:
     engine = create_engine(DB_DSN, future=True)
     log.info(f"Connected to database: {engine.url}")
 
-    # ── Extract ──────────────────────────────
     raw = extract()
 
-    # ── Transform ────────────────────────────
     log.info("Transforming data …")
 
     comp_id_map = build_competition_id_map(raw["competitions"])
@@ -291,7 +268,6 @@ def run_etl() -> None:
     valid_clubs_for_vals = set(dim_clubs_full["club_id"].dropna().astype(int))
     fact_vals = transform_fact_player_valuations(raw["valuations"], valid_players, valid_clubs_for_vals)
 
-    # Build dim_date from every date column across all fact tables
     dim_date = build_dim_date(
         [
             pd.to_datetime(raw["games"]["date"],       errors="coerce"),
@@ -300,7 +276,6 @@ def run_etl() -> None:
         ]
     )
 
-    # ── Load (dimension tables first, then facts) ──
     log.info("Loading dimensions …")
     upsert(dim_date,         "warehouse.dim_date",         engine, ["date_id"])
     upsert(dim_competitions, "warehouse.dim_competitions", engine, ["competition_id"])
