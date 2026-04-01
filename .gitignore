@@ -1,0 +1,9 @@
+# Ignore all CSV files
+*.csv
+
+# Ignore virtual environment directories named myenv/
+myenv/
+
+# Ignore dotenv files
+.env
+
