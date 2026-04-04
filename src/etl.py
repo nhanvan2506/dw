@@ -1,12 +1,15 @@
 import os
 import logging
 from pathlib import Path
-
 import pandas as pd
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+ROOT_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(ROOT_DIR / ".env")
+
+csv_env = os.getenv("CSV_DIR", "data")
+CSV_DIR = (ROOT_DIR / csv_env).resolve()
 
 DB_DSN = (
     f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
@@ -14,7 +17,6 @@ DB_DSN = (
     f"/{os.getenv('DB_NAME')}"
 )
 
-CSV_DIR = Path(os.getenv("CSV_DIR", "."))
 CHUNK_SIZE = 50_000                       
 
 logging.basicConfig(
@@ -58,6 +60,96 @@ def upsert(df: pd.DataFrame, table: str, engine, conflict_cols: list[str]) -> No
             conn.execute(stmt, chunk.to_dict(orient="records"))
 
     log.info(f"  ✓ {table} loaded")
+
+
+def init_db_schema(engine) -> None:
+    """Create warehouse schema and target tables if they do not exist."""
+    ddl_statements = [
+        "CREATE SCHEMA IF NOT EXISTS warehouse",
+        """
+        CREATE TABLE IF NOT EXISTS warehouse.dim_date (
+            date_id DATE PRIMARY KEY,
+            year INTEGER,
+            month INTEGER,
+            day INTEGER,
+            week INTEGER,
+            quarter INTEGER,
+            day_of_week INTEGER
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS warehouse.dim_competitions (
+            competition_id INTEGER PRIMARY KEY,
+            name TEXT,
+            country TEXT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS warehouse.dim_clubs (
+            club_id BIGINT PRIMARY KEY,
+            club_name TEXT,
+            country TEXT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS warehouse.dim_players (
+            player_id BIGINT PRIMARY KEY,
+            name TEXT,
+            birth_date DATE,
+            position TEXT,
+            nationality TEXT
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS warehouse.fact_matches (
+            match_id BIGINT PRIMARY KEY,
+            competition_id INTEGER NOT NULL,
+            date_id DATE NOT NULL,
+            home_club_id BIGINT,
+            away_club_id BIGINT,
+            home_score INTEGER,
+            away_score INTEGER,
+            FOREIGN KEY (competition_id) REFERENCES warehouse.dim_competitions (competition_id),
+            FOREIGN KEY (date_id) REFERENCES warehouse.dim_date (date_id),
+            FOREIGN KEY (home_club_id) REFERENCES warehouse.dim_clubs (club_id),
+            FOREIGN KEY (away_club_id) REFERENCES warehouse.dim_clubs (club_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS warehouse.fact_player_performance (
+            player_id BIGINT NOT NULL,
+            match_id BIGINT NOT NULL,
+            date_id DATE NOT NULL,
+            minutes_played INTEGER,
+            goals INTEGER,
+            assists INTEGER,
+            yellow_cards INTEGER,
+            red_cards INTEGER,
+            PRIMARY KEY (player_id, match_id),
+            FOREIGN KEY (player_id) REFERENCES warehouse.dim_players (player_id),
+            FOREIGN KEY (match_id) REFERENCES warehouse.fact_matches (match_id),
+            FOREIGN KEY (date_id) REFERENCES warehouse.dim_date (date_id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS warehouse.fact_player_valuations (
+            player_id BIGINT NOT NULL,
+            date_id DATE NOT NULL,
+            market_value_eur NUMERIC,
+            club_id BIGINT,
+            PRIMARY KEY (player_id, date_id),
+            FOREIGN KEY (player_id) REFERENCES warehouse.dim_players (player_id),
+            FOREIGN KEY (date_id) REFERENCES warehouse.dim_date (date_id),
+            FOREIGN KEY (club_id) REFERENCES warehouse.dim_clubs (club_id)
+        )
+        """,
+    ]
+
+    with engine.begin() as conn:
+        for stmt in ddl_statements:
+            conn.execute(text(stmt))
+
+    log.info("Warehouse schema and tables are ready")
 
 def extract() -> dict[str, pd.DataFrame]:
     return {
@@ -158,19 +250,6 @@ def transform_dim_players(players_raw: pd.DataFrame) -> pd.DataFrame:
     return df.dropna(subset=["player_id"]).drop_duplicates("player_id")
 
 
-def build_competition_id_map(competitions_raw: pd.DataFrame) -> dict:
-    """Maps string competition_id codes → stable integers."""
-    codes = competitions_raw["competition_id"].unique()
-    return {code: idx + 1 for idx, code in enumerate(sorted(codes))}
-
-
-def transform_dim_competitions(competitions_raw: pd.DataFrame, id_map: dict) -> pd.DataFrame:
-    df = competitions_raw[["competition_id", "name", "country_name"]].copy()
-    df.rename(columns={"country_name": "country"}, inplace=True)
-    df["competition_id"] = df["competition_id"].map(id_map)
-    return df.dropna(subset=["competition_id"]).drop_duplicates("competition_id")
-
-
 def transform_fact_matches(games_raw: pd.DataFrame, id_map: dict, valid_club_ids: set) -> pd.DataFrame:
     df = games_raw[
         ["game_id", "competition_id", "date",
@@ -243,6 +322,8 @@ def transform_fact_player_valuations(valuations_raw: pd.DataFrame, valid_player_
 def run_etl() -> None:
     engine = create_engine(DB_DSN, future=True)
     log.info(f"Connected to database: {engine.url}")
+
+    init_db_schema(engine)
 
     raw = extract()
 
