@@ -1,9 +1,12 @@
 # Ignore all CSV files
 *.csv
 
-# Ignore virtual environment directories named myenv/
-myenv/
+# Ignore Python cache
+__pycache__/
+*.pyc
 
 # Ignore dotenv files
 .env
 
+.pi/
+openspec/
