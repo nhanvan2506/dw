@@ -10,3 +10,6 @@ __pycache__/
 
 .pi/
 openspec/
+
+# Ignore virtual environment
+.venv/

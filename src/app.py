@@ -14,7 +14,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from build_mart import build_data_mart
-
+from similar_player_recommender import recommend_similar_cheaper_players
 ROOT_DIR = SRC_DIR.parent
 load_dotenv(ROOT_DIR / ".env")
 
@@ -181,6 +181,165 @@ def render_visual_analysis(filtered_df: pd.DataFrame, shortlist_df: pd.DataFrame
             st.info("No shortlist candidates available for the score chart.")
 
 
+def render_similar_alternatives(df: pd.DataFrame) -> None:
+    st.subheader("Cheaper Similar Alternative Recommendation")
+    st.caption(
+        "Select a target player and the system recommends cheaper players with similar performance profiles."
+    )
+
+    if df.empty:
+        st.info("No player data available for similarity recommendation.")
+        return
+
+    candidate_names = sorted(df["name"].dropna().unique())
+
+    control_col1, control_col2 = st.columns([2, 1])
+
+    with control_col1:
+        target_player = st.selectbox(
+            "Target player",
+            options=candidate_names,
+            index=0,
+        )
+
+    with control_col2:
+        same_position = st.checkbox(
+            "Same position only",
+            value=True,
+        )
+
+    filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+
+    with filter_col1:
+        max_value_ratio = st.slider(
+            "Max value ratio",
+            min_value=0.30,
+            max_value=1.00,
+            value=0.75,
+            step=0.05,
+            help="Candidate value must be below this ratio of the target player's market value.",
+        )
+
+    with filter_col2:
+        min_minutes_alt = st.slider(
+            "Min minutes",
+            min_value=0,
+            max_value=int(df["total_minutes"].max()),
+            value=min(900, int(df["total_minutes"].max())),
+            step=100,
+        )
+
+    with filter_col3:
+        age_range = st.slider(
+            "Age range",
+            min_value=16,
+            max_value=40,
+            value=(18, 30),
+            step=1,
+        )
+
+    with filter_col4:
+        min_similarity = st.slider(
+            "Min similarity",
+            min_value=0,
+            max_value=100,
+            value=70,
+            step=5,
+        )
+
+    try:
+        target, alternatives = recommend_similar_cheaper_players(
+            player_name=target_player,
+            top_n=10,
+            max_value_ratio=max_value_ratio,
+            min_minutes=min_minutes_alt,
+            min_age=age_range[0],
+            max_age=age_range[1],
+            min_similarity=min_similarity,
+            same_position=same_position,
+        )
+    except Exception as exc:
+        st.error("Unable to generate similar player recommendations.")
+        st.exception(exc)
+        return
+
+    st.markdown("**Target player**")
+
+    target_display = pd.DataFrame(
+        [
+            {
+                "name": target["name"],
+                "position": target["position"],
+                "age": target.get("age", None),
+                "club": target.get("club_name", "Unknown"),
+                "country": target.get("club_country", "Unknown"),
+                "market_value_eur": target["market_value_eur"],
+                "smart_value_index": target["smart_value_index"],
+            }
+        ]
+    )
+
+    st.dataframe(
+        target_display,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "market_value_eur": st.column_config.NumberColumn("Market value (€)", format="€%d"),
+            "smart_value_index": st.column_config.NumberColumn("Smart Value Index", format="%.2f"),
+            "age": st.column_config.NumberColumn("Age", format="%.1f"),
+        },
+    )
+
+    st.markdown("**Recommended cheaper alternatives**")
+
+    if alternatives.empty:
+        st.info(
+            "No cheaper similar alternatives found with the current filters. "
+            "Try increasing Max value ratio, lowering Min minutes, or allowing different positions."
+        )
+        return
+
+    display_columns = [
+        "name",
+        "position",
+        "age",
+        "club_name",
+        "club_country",
+        "market_value_eur",
+        "total_minutes",
+        "goal_contributions",
+        "attacking_contribution_per_90",
+        "similarity_score",
+        "affordability_score",
+        "smart_value_index",
+        "alternative_score",
+    ]
+
+    display_columns = [col for col in display_columns if col in alternatives.columns]
+
+    st.dataframe(
+        alternatives[display_columns],
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "market_value_eur": st.column_config.NumberColumn("Market value (€)", format="€%d"),
+            "total_minutes": st.column_config.NumberColumn("Minutes", format="%d"),
+            "goal_contributions": st.column_config.NumberColumn("Goal contributions", format="%.0f"),
+            "attacking_contribution_per_90": st.column_config.NumberColumn("Contrib / 90", format="%.3f"),
+            "similarity_score": st.column_config.NumberColumn("Similarity", format="%.2f"),
+            "affordability_score": st.column_config.NumberColumn("Affordability", format="%.2f"),
+            "smart_value_index": st.column_config.NumberColumn("Smart Value Index", format="%.2f"),
+            "alternative_score": st.column_config.NumberColumn("Alternative Score", format="%.2f"),
+            "age": st.column_config.NumberColumn("Age", format="%.1f"),
+        },
+    )
+
+    st.markdown("**Recommendation formula**")
+    st.code(
+        "Alternative Score = 55% Similarity + 25% Affordability + 20% Smart Value Index",
+        language="text",
+    )
+
 def render_shortlist(shortlist_df: pd.DataFrame) -> None:
     st.subheader(f"Top {SHORTLIST_SIZE} shortlist")
     st.caption("This is the main recommendation list. Players are ordered by Smart Value Index, highest first.")
@@ -286,4 +445,5 @@ if filtered_df.empty:
 
 render_shortlist(shortlist_df)
 render_score_guide()
+render_similar_alternatives(df)
 render_visual_analysis(filtered_df, shortlist_df)
