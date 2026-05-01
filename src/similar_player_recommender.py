@@ -305,6 +305,7 @@ def recommend_similar_cheaper_players(
 
 def format_output(df: pd.DataFrame) -> pd.DataFrame:
     display_cols = [
+        "smart_value_index",
         "name",
         "position",
         "age",
@@ -312,7 +313,6 @@ def format_output(df: pd.DataFrame) -> pd.DataFrame:
         "market_value_eur",
         "recent_minutes",
         "similarity_score",
-        "smart_value_index",
         "alternative_score",
         "affordability_score",
     ]

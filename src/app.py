@@ -270,6 +270,7 @@ def render_shortlist(shortlist_df: pd.DataFrame, evidence_window: str) -> None:
         return
 
     display_columns = [
+        "smart_value_index",
         "name",
         "position",
         "age",
@@ -279,7 +280,6 @@ def render_shortlist(shortlist_df: pd.DataFrame, evidence_window: str) -> None:
         "recent_minutes",
         "goal_contributions",
         "attacking_contribution_per_90",
-        "smart_value_index",
         "production_score",
         "value_score",
         "reliability_score",
@@ -292,6 +292,7 @@ def render_shortlist(shortlist_df: pd.DataFrame, evidence_window: str) -> None:
         hide_index=True,
         width="stretch",
         column_config={
+            "smart_value_index": st.column_config.NumberColumn("Smart Value Index", format="%.2f"),
             "age": st.column_config.NumberColumn("Age", format="%.1f"),
             "nationality": st.column_config.TextColumn("Nationality"),
             "club_name": st.column_config.TextColumn("Current club"),
@@ -299,7 +300,6 @@ def render_shortlist(shortlist_df: pd.DataFrame, evidence_window: str) -> None:
             "recent_minutes": st.column_config.NumberColumn(f"Recent minutes ({window_label})", format="%d"),
             "goal_contributions": st.column_config.NumberColumn("Goal contributions", format="%.0f"),
             "attacking_contribution_per_90": st.column_config.NumberColumn("Contribution / 90", format="%.2f"),
-            "smart_value_index": st.column_config.NumberColumn("Smart Value Index", format="%.2f"),
             "production_score": st.column_config.NumberColumn("Production", format="%.2f"),
             "value_score": st.column_config.NumberColumn("Value", format="%.2f"),
             "reliability_score": st.column_config.NumberColumn("Reliability", format="%.2f"),
@@ -416,6 +416,7 @@ def render_similar_alternatives(df: pd.DataFrame, evidence_window: str, reliabil
         return
 
     display_columns = [
+        "smart_value_index",
         "name",
         "position",
         "age",
@@ -423,7 +424,6 @@ def render_similar_alternatives(df: pd.DataFrame, evidence_window: str, reliabil
         "market_value_eur",
         "recent_minutes",
         "similarity_score",
-        "smart_value_index",
         "alternative_score",
         "affordability_score",
     ]
@@ -434,11 +434,11 @@ def render_similar_alternatives(df: pd.DataFrame, evidence_window: str, reliabil
         hide_index=True,
         width="stretch",
         column_config={
+            "smart_value_index": st.column_config.NumberColumn("Smart Value Index", format="%.2f"),
             "club_name": st.column_config.TextColumn("Current club"),
             "market_value_eur": st.column_config.NumberColumn("Market value (€)", format="€%,d"),
             "recent_minutes": st.column_config.NumberColumn(f"Recent minutes ({window_label})", format="%d"),
             "similarity_score": st.column_config.NumberColumn("Similarity", format="%.2f"),
-            "smart_value_index": st.column_config.NumberColumn("Smart Value Index", format="%.2f"),
             "alternative_score": st.column_config.NumberColumn("Alternative Score", format="%.2f"),
             "affordability_score": st.column_config.NumberColumn("Affordability", format="%.2f"),
             "age": st.column_config.NumberColumn("Age", format="%.1f"),
@@ -493,17 +493,11 @@ age_range = st.sidebar.slider(
 
 window_label = get_evidence_window_label(evidence_window)
 min_recent_minutes = get_reliability_threshold(evidence_window, reliability_level)
-st.sidebar.caption(
-    f"{reliability_level} reliability means at least {min_recent_minutes:,} recent minutes using {window_label.lower()} evidence, and the age window is {age_range[0]}–{age_range[1]}."
-)
 
 evidence_df = prepare_evidence_view(df, evidence_window)
 
 if navigation == "Potential Shortlist":
     budget_defaults = build_budget_defaults(evidence_df)
-
-    st.sidebar.header("Decision criteria")
-    st.sidebar.caption("Filter the ranked player pool by affordability, recent evidence, and role fit.")
 
     max_budget = st.sidebar.slider(
         "Max Budget (€ Millions)",
@@ -555,9 +549,6 @@ if navigation == "Potential Shortlist":
     render_visual_analysis(filtered_df)
 
 else:
-    st.sidebar.header("Recommendation filters")
-    st.sidebar.caption("Use the target player and similarity controls to find alternatives.")
-
     st.subheader("Similar Alternative Recommendation")
     st.caption(
         f"Choose a target player and the system recommends players with similar performance profiles using {window_label.lower()} evidence."
