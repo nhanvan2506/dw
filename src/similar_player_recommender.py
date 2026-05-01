@@ -3,16 +3,25 @@ import os
 import re
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 from sklearn.compose import ColumnTransformer
 from sklearn.neighbors import NearestNeighbors
-from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
-
+from evidence_windows import (
+    DEFAULT_EVIDENCE_WINDOW,
+    DEFAULT_RELIABILITY_LEVEL,
+    get_evidence_window_options,
+    get_recent_appearances_column,
+    get_recent_minutes_column,
+    get_reliability_score_column,
+    get_reliability_threshold,
+    get_smart_value_index_column,
+    get_window_config,
+)
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT_DIR / ".env")
@@ -32,6 +41,8 @@ NUMERIC_FEATURES = [
     "appearances_count",
     "total_minutes",
     "minutes_per_appearance",
+    "recent_minutes",
+    "recent_appearances",
     "total_goals",
     "total_assists",
     "goal_contributions",
@@ -95,12 +106,25 @@ def load_player_pool() -> pd.DataFrame:
         pr.red_cards,
         pr.discipline_risk_per_90,
 
+        pr.recent_minutes_last_season,
+        pr.recent_appearances_last_season,
+        pr.recent_minutes_last_3_seasons,
+        pr.recent_appearances_last_3_seasons,
+        pr.recent_minutes_last_5_seasons,
+        pr.recent_appearances_last_5_seasons,
+
         pr.market_value_eur,
         pr.production_score,
         pr.value_score,
-        pr.reliability_score,
         pr.discipline_score,
-        pr.smart_value_index
+        pr.reliability_score_last_season,
+        pr.reliability_score_last_3_seasons,
+        pr.reliability_score_last_5_seasons,
+        pr.smart_value_index,
+        pr.smart_value_index_last_season,
+        pr.smart_value_index_last_3_seasons,
+        pr.smart_value_index_last_5_seasons,
+        pr.final_dss_score
 
     FROM mart.player_ranking pr
     LEFT JOIN warehouse.dim_players dp
@@ -116,9 +140,28 @@ def load_player_pool() -> pd.DataFrame:
       AND pr.total_minutes IS NOT NULL;
     """
 
-    df = pd.read_sql(query, engine)
+    try:
+        df = pd.read_sql(query, engine)
+    except SQLAlchemyError as exc:
+        raise RuntimeError(
+            "mart.player_ranking is out of date for the similarity recommender. Rebuild the mart with `python src/build_mart.py` after the warehouse ETL."
+        ) from exc
 
-    for col in NUMERIC_FEATURES + ["market_value_eur"]:
+    for col in NUMERIC_FEATURES + [
+        "market_value_eur",
+        "recent_minutes_last_season",
+        "recent_appearances_last_season",
+        "recent_minutes_last_3_seasons",
+        "recent_appearances_last_3_seasons",
+        "recent_minutes_last_5_seasons",
+        "recent_appearances_last_5_seasons",
+        "reliability_score_last_season",
+        "reliability_score_last_3_seasons",
+        "reliability_score_last_5_seasons",
+        "smart_value_index_last_season",
+        "smart_value_index_last_3_seasons",
+        "smart_value_index_last_5_seasons",
+    ]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -131,6 +174,20 @@ def load_player_pool() -> pd.DataFrame:
     df = df[df["age"].between(16, 40)]
 
     return df.reset_index(drop=True)
+
+
+def apply_active_window(df: pd.DataFrame, evidence_window: str) -> pd.DataFrame:
+    window_config = get_window_config(evidence_window)
+    view = df.copy()
+
+    view["recent_minutes"] = pd.to_numeric(view[get_recent_minutes_column(evidence_window)], errors="coerce")
+    view["recent_appearances"] = pd.to_numeric(view[get_recent_appearances_column(evidence_window)], errors="coerce")
+    view["reliability_score"] = pd.to_numeric(view[get_reliability_score_column(evidence_window)], errors="coerce")
+    view["smart_value_index"] = pd.to_numeric(view[get_smart_value_index_column(evidence_window)], errors="coerce")
+    view["final_dss_score"] = view["smart_value_index"]
+    view["evidence_window_label"] = window_config["label"]
+
+    return view
 
 
 def find_target_player(df: pd.DataFrame, player_name: str) -> pd.Series:
@@ -185,28 +242,27 @@ def build_similarity_model(df: pd.DataFrame):
 def recommend_similar_cheaper_players(
     player_name: str,
     top_n: int = 10,
+    evidence_window: str = DEFAULT_EVIDENCE_WINDOW,
+    reliability_level: str = DEFAULT_RELIABILITY_LEVEL,
     max_value_ratio: float = 0.75,
     max_budget: float | None = None,
-    min_minutes: int = 900,
     min_age: int = 18,
     max_age: int = 30,
     min_similarity: float = 70.0,
     same_position: bool = True,
 ) -> tuple[pd.Series, pd.DataFrame]:
-    df = load_player_pool()
+    df = apply_active_window(load_player_pool(), evidence_window)
     target = find_target_player(df, player_name)
 
-    preprocessor, knn, X_processed = build_similarity_model(df)
+    _, knn, X_processed = build_similarity_model(df)
 
     target_idx = int(target.name)
-
-    # Keep target player as a 2D matrix: shape = (1, n_features)
     target_vector = X_processed[target_idx : target_idx + 1]
 
     distances, indices = knn.kneighbors(
         target_vector,
-        n_neighbors=min(200, len(df))
-)
+        n_neighbors=min(200, len(df)),
+    )
 
     result = df.iloc[indices[0]].copy()
     result["cosine_distance"] = distances[0]
@@ -218,33 +274,21 @@ def recommend_similar_cheaper_players(
         result = result[result["position"] == target["position"]].copy()
 
     target_value = float(target["market_value_eur"])
-
-    # Cheaper alternative condition
     result = result[result["market_value_eur"] < target_value].copy()
-
-    # Stronger affordability condition
     result = result[result["market_value_eur"] <= target_value * max_value_ratio].copy()
 
     if max_budget is not None:
         result = result[result["market_value_eur"] <= max_budget].copy()
 
-    result = result[result["total_minutes"] >= min_minutes].copy()
-
-    result = result[
-        result["age"].between(min_age, max_age)
-    ].copy()
-
-    result = result[
-        result["similarity_score"] >= min_similarity
-    ].copy()
+    recent_minute_threshold = get_reliability_threshold(evidence_window, reliability_level)
+    result = result[result["recent_minutes"] >= recent_minute_threshold].copy()
+    result = result[result["age"].between(min_age, max_age)].copy()
+    result = result[result["similarity_score"] >= min_similarity].copy()
 
     if result.empty:
         return target, result
 
-    result["affordability_score"] = (
-        100 * (1 - result["market_value_eur"] / target_value)
-    ).clip(0, 100)
-
+    result["affordability_score"] = (100 * (1 - result["market_value_eur"] / target_value)).clip(0, 100)
     result["alternative_score"] = (
         0.55 * result["similarity_score"]
         + 0.25 * result["affordability_score"]
@@ -265,15 +309,12 @@ def format_output(df: pd.DataFrame) -> pd.DataFrame:
         "position",
         "age",
         "club_name",
-        "club_country",
         "market_value_eur",
-        "total_minutes",
-        "goal_contributions",
-        "attacking_contribution_per_90",
+        "recent_minutes",
         "similarity_score",
-        "affordability_score",
         "smart_value_index",
         "alternative_score",
+        "affordability_score",
     ]
 
     display_cols = [c for c in display_cols if c in df.columns]
@@ -286,10 +327,8 @@ def format_output(df: pd.DataFrame) -> pd.DataFrame:
     if "market_value_eur" in out.columns:
         out["market_value_eur"] = out["market_value_eur"].apply(lambda x: f"€{x / 1_000_000:.2f}M")
 
-    if "attacking_contribution_per_90" in out.columns:
-        out["attacking_contribution_per_90"] = pd.to_numeric(
-            out["attacking_contribution_per_90"], errors="coerce"
-        ).round(3)
+    if "recent_minutes" in out.columns:
+        out["recent_minutes"] = pd.to_numeric(out["recent_minutes"], errors="coerce").round(0)
 
     return out
 
@@ -298,9 +337,12 @@ def main():
     parser = argparse.ArgumentParser(description="Find cheaper similar alternatives for a target football player.")
     parser.add_argument("--player", required=True, help="Target player name")
     parser.add_argument("--top", type=int, default=10, help="Number of recommendations")
+    parser.add_argument("--evidence-window", choices=get_evidence_window_options(), default=DEFAULT_EVIDENCE_WINDOW)
+    parser.add_argument("--reliability-level", choices=["Low", "Medium", "High"], default=DEFAULT_RELIABILITY_LEVEL)
     parser.add_argument("--max-value-ratio", type=float, default=0.75, help="Candidate max value as ratio of target value")
     parser.add_argument("--max-budget", type=float, default=None, help="Optional max budget in EUR")
-    parser.add_argument("--min-minutes", type=int, default=900, help="Minimum total minutes")
+    parser.add_argument("--min-age", type=int, default=18, help="Minimum age")
+    parser.add_argument("--max-age", type=int, default=30, help="Maximum age")
     parser.add_argument("--allow-different-position", action="store_true", help="Allow recommendations from different positions")
 
     args = parser.parse_args()
@@ -308,11 +350,17 @@ def main():
     target, recommendations = recommend_similar_cheaper_players(
         player_name=args.player,
         top_n=args.top,
+        evidence_window=args.evidence_window,
+        reliability_level=args.reliability_level,
         max_value_ratio=args.max_value_ratio,
         max_budget=args.max_budget,
-        min_minutes=args.min_minutes,
+        min_age=args.min_age,
+        max_age=args.max_age,
         same_position=not args.allow_different_position,
     )
+
+    window_label = get_window_config(args.evidence_window)["label"]
+    threshold = get_reliability_threshold(args.evidence_window, args.reliability_level)
 
     print("\nTARGET PLAYER")
     print(
@@ -324,7 +372,7 @@ def main():
                     "age": round(float(target["age"]), 2),
                     "market_value_eur": f"€{float(target['market_value_eur']) / 1_000_000:.2f}M",
                     "club_name": target.get("club_name", "Unknown"),
-                    "club_country": target.get("club_country", "Unknown"),
+                    "recent_minutes": int(round(float(target["recent_minutes"]))),
                     "smart_value_index": round(float(target["smart_value_index"]), 2),
                 }
             ]
@@ -332,8 +380,10 @@ def main():
     )
 
     if recommendations.empty:
-        print("\nNo cheaper similar alternatives found with the current filters.")
-        print("Try increasing --max-value-ratio, lowering --min-minutes, or using --allow-different-position.")
+        print(
+            f"\nNo cheaper similar alternatives found with {window_label.lower()} evidence and {args.reliability_level.lower()} reliability ({threshold:,}+ recent minutes)."
+        )
+        print("Try increasing --max-value-ratio, lowering --min-age or --max-age, or using --allow-different-position.")
         return
 
     print("\nCHEAPER SIMILAR ALTERNATIVES")

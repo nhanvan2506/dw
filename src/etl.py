@@ -17,7 +17,7 @@ DB_DSN = (
     f"/{os.getenv('DB_NAME')}"
 )
 
-CHUNK_SIZE = 50_000                       
+CHUNK_SIZE = 200_000
 
 logging.basicConfig(
     level=logging.INFO,
@@ -105,6 +105,7 @@ def init_db_schema(engine) -> None:
             match_id BIGINT PRIMARY KEY,
             competition_id INTEGER NOT NULL,
             date_id DATE NOT NULL,
+            season INTEGER,
             home_club_id BIGINT,
             away_club_id BIGINT,
             home_score INTEGER,
@@ -148,6 +149,7 @@ def init_db_schema(engine) -> None:
     with engine.begin() as conn:
         for stmt in ddl_statements:
             conn.execute(text(stmt))
+        conn.execute(text("ALTER TABLE warehouse.fact_matches ADD COLUMN IF NOT EXISTS season INTEGER"))
 
     log.info("Warehouse schema and tables are ready")
 
@@ -252,27 +254,28 @@ def transform_dim_players(players_raw: pd.DataFrame) -> pd.DataFrame:
 
 def transform_fact_matches(games_raw: pd.DataFrame, id_map: dict, valid_club_ids: set) -> pd.DataFrame:
     df = games_raw[
-        ["game_id", "competition_id", "date",
-         "home_club_id", "away_club_id",
-         "home_club_goals", "away_club_goals"]
+        ["game_id", "competition_id", "date", "season", "home_club_id", "away_club_id", "home_club_goals", "away_club_goals"]
     ].copy()
     df.rename(
         columns={
-            "game_id":         "match_id",
-            "date":            "date_id",
+            "game_id": "match_id",
+            "date": "date_id",
             "home_club_goals": "home_score",
             "away_club_goals": "away_score",
         },
         inplace=True,
     )
-    df["competition_id"] = df["competition_id"].map(id_map)   
-    df["date_id"]        = pd.to_datetime(df["date_id"], errors="coerce").dt.date
-    df["match_id"]       = pd.to_numeric(df["match_id"],      errors="coerce")
-    df["home_club_id"]   = pd.to_numeric(df["home_club_id"],  errors="coerce")
-    df["away_club_id"]   = pd.to_numeric(df["away_club_id"],  errors="coerce")
-    df["home_score"]     = pd.to_numeric(df["home_score"],    errors="coerce")
-    df["away_score"]     = pd.to_numeric(df["away_score"],    errors="coerce")
+    df["season"] = pd.to_numeric(df["season"], errors="coerce")
+    df["competition_id"] = df["competition_id"].map(id_map)
+    df["date_id"] = pd.to_datetime(df["date_id"], errors="coerce").dt.date
+    df["match_id"] = pd.to_numeric(df["match_id"], errors="coerce")
+    df["home_club_id"] = pd.to_numeric(df["home_club_id"], errors="coerce")
+    df["away_club_id"] = pd.to_numeric(df["away_club_id"], errors="coerce")
+    df["home_score"] = pd.to_numeric(df["home_score"], errors="coerce")
+    df["away_score"] = pd.to_numeric(df["away_score"], errors="coerce")
 
+    df = df.dropna(subset=["season"])
+    df["season"] = df["season"].astype(int)
     df = df[df["home_club_id"].isin(valid_club_ids) & df["away_club_id"].isin(valid_club_ids)]
 
     return df.dropna(subset=["match_id", "date_id", "competition_id"]).drop_duplicates("match_id")
@@ -328,6 +331,13 @@ def run_etl() -> None:
     raw = extract()
 
     log.info("Transforming data …")
+
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "TRUNCATE TABLE warehouse.fact_player_valuations, warehouse.fact_player_performance, warehouse.fact_matches CASCADE"
+            )
+        )
 
     comp_id_map = build_competition_id_map(raw["competitions"])
 

@@ -54,6 +54,7 @@ This creates:
 - total_assists
 - goal_contributions
 - attacking_contribution_per_90
+- recent minutes and appearances for the last 1 / 3 / 5 seasons
 - yellow_cards / red_cards
 - discipline_risk_per_90
 - market_value_eur (latest known valuation)
@@ -63,7 +64,8 @@ This creates:
 - value_retention_ratio
 
 `mart.player_ranking` builds on those features and keeps the score transparent with:
-- reliability_score
+- window-specific reliability scores for the last 1 / 3 / 5 seasons
+- window-specific Smart Value Index columns
 - production_score
 - value_score
 - discipline_score
@@ -77,6 +79,7 @@ The refined ranking keeps the model simple and explainable for the course projec
 - only players with recent market valuations are ranked
 - goalkeepers are excluded from this ranking because the current model is built around outfield attacking/value metrics
 - the final score combines production, value, reliability, and discipline into a weighted DSS score
+- the dashboard can switch between exact-season evidence windows without recomputing the mart in Streamlit
 
 ### Validation
 
@@ -95,9 +98,10 @@ App URL:
 ## Dashboard flow
 The Streamlit dashboard is organized to support a simple FC Barcelona recruitment decision flow:
 - **Dashboard overview** — explains the current recruitment scenario and shows shortlist summary indicators
-- **Decision criteria** — sidebar filters for budget, reliability (minutes played), and position
-- **Visual analysis** — charts for value vs DSS score and top shortlist candidates
-- **Smart shortlist** — the final ranked table with player role, value, output, and DSS score fields
+- **Decision criteria** — sidebar filters for budget, evidence window, reliability level, and position
+- **Visual analysis** — one value-vs-score chart for the active evidence window
+- **Smart shortlist** — the final ranked table with player role, value, recent evidence, and DSS score fields
+- **Similar Alternatives** — target player, filters, and recommended cheaper replacements
 
 This keeps the app easy to demo while still showing clear decision-support logic from the mart.
 

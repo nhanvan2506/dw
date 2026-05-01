@@ -1,8 +1,9 @@
-import os
 import logging
+import os
 from pathlib import Path
-from sqlalchemy import create_engine, text
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT_DIR / ".env")
@@ -17,9 +18,41 @@ MIN_RANKED_APPEARANCES = 10
 MIN_RANKED_MINUTES = 900
 RECENT_VALUATION_DAYS = 730
 MIN_MARKET_VALUE_FLOOR = 250_000
+WINDOW_ORDER = [("last_season", 1), ("last_3_seasons", 3), ("last_5_seasons", 5)]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(levelname)-8s  %(message)s")
 log = logging.getLogger(__name__)
+
+
+def recent_window_selects() -> str:
+    lines: list[str] = []
+    for window_key, season_count in WINDOW_ORDER:
+        lines.append(
+            f"        COALESCE(SUM(CASE WHEN sr.season_rank <= {season_count} THEN fpp.minutes_played ELSE 0 END), 0) AS recent_minutes_{window_key},"
+        )
+        lines.append(
+            f"        COALESCE(COUNT(*) FILTER (WHERE sr.season_rank <= {season_count}), 0) AS recent_appearances_{window_key},"
+        )
+    return "\n".join(lines).rstrip(",")
+
+
+def reliability_score_selects() -> str:
+    lines: list[str] = []
+    for window_key, _season_count in WINDOW_ORDER:
+        lines.append(
+            f"        ROUND((PERCENT_RANK() OVER (ORDER BY recent_minutes_{window_key}, recent_appearances_{window_key}) * 100)::NUMERIC, 2) AS reliability_score_{window_key},"
+        )
+    return "\n".join(lines).rstrip(",")
+
+
+def smart_value_selects() -> str:
+    lines: list[str] = []
+    for window_key, _season_count in WINDOW_ORDER:
+        lines.append(
+            f"        ROUND((production_score * 0.40) + (value_score * 0.35) + (reliability_score_{window_key} * 0.20) + (discipline_score * 0.05), 2) AS smart_value_index_{window_key},"
+        )
+    return "\n".join(lines).rstrip(",")
+
 
 MART_SQL = f"""
 CREATE SCHEMA IF NOT EXISTS mart;
@@ -28,7 +61,18 @@ DROP TABLE IF EXISTS mart.player_ranking;
 DROP TABLE IF EXISTS mart.player_features;
 
 CREATE TABLE mart.player_features AS
-WITH performance_base AS (
+WITH season_order AS (
+    SELECT DISTINCT season AS season_year
+    FROM warehouse.fact_matches
+    WHERE season IS NOT NULL
+),
+season_rank AS (
+    SELECT
+        season_year,
+        DENSE_RANK() OVER (ORDER BY season_year DESC) AS season_rank
+    FROM season_order
+),
+performance_base AS (
     SELECT
         p.player_id,
         p.name,
@@ -59,6 +103,17 @@ performance_features AS (
         ROUND(((total_goals + total_assists)::NUMERIC * 90) / NULLIF(total_minutes, 0), 3) AS attacking_contribution_per_90,
         ROUND(((yellow_cards + (red_cards * 3))::NUMERIC * 90) / NULLIF(total_minutes, 0), 3) AS discipline_risk_per_90
     FROM performance_base
+),
+recent_window_features AS (
+    SELECT
+        fpp.player_id,
+{recent_window_selects()}
+    FROM warehouse.fact_player_performance fpp
+    JOIN warehouse.fact_matches fm
+        ON fpp.match_id = fm.match_id
+    JOIN season_rank sr
+        ON sr.season_year = fm.season
+    GROUP BY fpp.player_id
 ),
 latest_valuations AS (
     SELECT player_id, market_value_eur, date_id AS latest_value_date
@@ -95,6 +150,12 @@ SELECT
     pf.yellow_cards,
     pf.red_cards,
     pf.discipline_risk_per_90,
+    COALESCE(rwf.recent_minutes_last_season, 0) AS recent_minutes_last_season,
+    COALESCE(rwf.recent_appearances_last_season, 0) AS recent_appearances_last_season,
+    COALESCE(rwf.recent_minutes_last_3_seasons, 0) AS recent_minutes_last_3_seasons,
+    COALESCE(rwf.recent_appearances_last_3_seasons, 0) AS recent_appearances_last_3_seasons,
+    COALESCE(rwf.recent_minutes_last_5_seasons, 0) AS recent_minutes_last_5_seasons,
+    COALESCE(rwf.recent_appearances_last_5_seasons, 0) AS recent_appearances_last_5_seasons,
     lv.market_value_eur,
     pv.peak_market_value_eur,
     lv.latest_value_date,
@@ -105,6 +166,7 @@ SELECT
     ) AS value_efficiency_index,
     ROUND(lv.market_value_eur / NULLIF(pv.peak_market_value_eur, 0), 3) AS value_retention_ratio
 FROM performance_features pf
+LEFT JOIN recent_window_features rwf ON pf.player_id = rwf.player_id
 LEFT JOIN latest_valuations lv ON pf.player_id = lv.player_id
 LEFT JOIN peak_valuations pv ON pf.player_id = pv.player_id;
 
@@ -124,7 +186,7 @@ eligible_players AS (
       AND position IS NOT NULL
       AND position <> 'Goalkeeper'
 ),
-scored_players AS (
+scored_players_base AS (
     SELECT
         player_id,
         name,
@@ -139,54 +201,32 @@ scored_players AS (
         yellow_cards,
         red_cards,
         discipline_risk_per_90,
+        recent_minutes_last_season,
+        recent_appearances_last_season,
+        recent_minutes_last_3_seasons,
+        recent_appearances_last_3_seasons,
+        recent_minutes_last_5_seasons,
+        recent_appearances_last_5_seasons,
         market_value_eur,
         peak_market_value_eur,
         latest_value_date,
         value_efficiency_index,
         value_retention_ratio,
-        ROUND((PERCENT_RANK() OVER (ORDER BY total_minutes, appearances_count) * 100)::NUMERIC, 2) AS reliability_score,
         ROUND((PERCENT_RANK() OVER (ORDER BY attacking_contribution_per_90, goal_contributions) * 100)::NUMERIC, 2) AS production_score,
         ROUND((PERCENT_RANK() OVER (ORDER BY value_efficiency_index, value_retention_ratio) * 100)::NUMERIC, 2) AS value_score,
-        ROUND(((1 - PERCENT_RANK() OVER (ORDER BY discipline_risk_per_90, yellow_cards, red_cards)) * 100)::NUMERIC, 2) AS discipline_score
+        ROUND(((1 - PERCENT_RANK() OVER (ORDER BY discipline_risk_per_90, yellow_cards, red_cards)) * 100)::NUMERIC, 2) AS discipline_score,
+{reliability_score_selects()}
     FROM eligible_players
+),
+scored_players AS (
+    SELECT
+        scored_players_base.*,
+{smart_value_selects()},
+        ROUND((production_score * 0.40) + (value_score * 0.35) + (reliability_score_last_3_seasons * 0.20) + (discipline_score * 0.05), 2) AS final_dss_score,
+        ROUND((production_score * 0.40) + (value_score * 0.35) + (reliability_score_last_3_seasons * 0.20) + (discipline_score * 0.05), 2) AS smart_value_index
+    FROM scored_players_base
 )
-SELECT
-    player_id,
-    name,
-    position,
-    appearances_count,
-    total_minutes,
-    minutes_per_appearance,
-    total_goals,
-    total_assists,
-    goal_contributions,
-    attacking_contribution_per_90,
-    yellow_cards,
-    red_cards,
-    discipline_risk_per_90,
-    market_value_eur,
-    peak_market_value_eur,
-    latest_value_date,
-    value_efficiency_index,
-    value_retention_ratio,
-    reliability_score,
-    production_score,
-    value_score,
-    discipline_score,
-    ROUND(
-        (production_score * 0.40) +
-        (value_score * 0.35) +
-        (reliability_score * 0.20) +
-        (discipline_score * 0.05),
-        2
-    ) AS final_dss_score,
-    ROUND(
-        (production_score * 0.40) +
-        (value_score * 0.35) +
-        (reliability_score * 0.20) +
-        (discipline_score * 0.05),
-        2
-    ) AS smart_value_index
+SELECT *
 FROM scored_players
 ORDER BY final_dss_score DESC, total_minutes DESC, goal_contributions DESC;
 """
@@ -220,7 +260,12 @@ def validate_mart(engine) -> None:
                    OR total_minutes IS NULL
                    OR production_score IS NULL
                    OR value_score IS NULL
-                   OR reliability_score IS NULL
+                   OR reliability_score_last_season IS NULL
+                   OR reliability_score_last_3_seasons IS NULL
+                   OR reliability_score_last_5_seasons IS NULL
+                   OR smart_value_index_last_season IS NULL
+                   OR smart_value_index_last_3_seasons IS NULL
+                   OR smart_value_index_last_5_seasons IS NULL
                 """
             )
         ).scalar_one()
