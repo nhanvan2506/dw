@@ -97,13 +97,14 @@ App URL:
 
 ## Dashboard flow
 The Streamlit dashboard is organized to support a simple FC Barcelona recruitment decision flow:
-- **Dashboard overview** — explains the current recruitment scenario and shows shortlist summary indicators
-- **Decision criteria** — sidebar filters for budget, evidence window, reliability level, and position
-- **Visual analysis** — one value-vs-score chart for the active evidence window
-- **Smart shortlist** — the final ranked table with player role, value, recent evidence, and DSS score fields
-- **Similar Alternatives** — target player, filters, and recommended cheaper replacements
+- **Dashboard overview** — shows the current scenario summary, shortlist summary indicators, and the recommended shortlist
+- **Scenario settings** — sidebar filters for evidence period and minimum reliability
+- **Player filters** — sidebar filters for age and, on the shortlist page, budget and position
+- **Visual analysis** — one Market Value vs DSS Score chart for the active evidence period
+- **Recommended shortlist** — the final ranked table with core decision columns first and a detailed metrics expander
+- **Cheaper Similar Alternatives** — target player, similarity filters, a result summary, and recommended cheaper replacements, with the current target and page filters preserved across page switches during the same session
 
-This keeps the app easy to demo while still showing clear decision-support logic from the mart.
+This keeps the app easy to demo while still showing clear decision-support logic from the mart. Both pages include short explanation text so the DSS Score and alternative-score rationale can be explained quickly in a presentation, and the UI uses restrained Barcelona-inspired accents on custom cards and headings without recoloring the whole dashboard.
 
 ## Daily restart flow
 If data/model SQL changes:

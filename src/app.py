@@ -1,3 +1,4 @@
+import html
 import math
 import os
 import sys
@@ -230,6 +231,143 @@ def format_eur_millions(value: float) -> str:
     return f"€{value / 1_000_000:.1f}M"
 
 
+def render_brand_styles() -> None:
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 2rem;
+        }
+        .dashboard-title {
+            background: linear-gradient(90deg, #a50044 0%, #004d98 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            color: transparent;
+            margin: 0;
+        }
+        .dashboard-title-accent {
+            width: 1000px;
+            height: 4px;
+            border-radius: 999px;
+            margin: 0.45rem 0 1rem;
+            background: linear-gradient(90deg, #a50044 0%, #004d98 100%);
+        }
+        .dashboard-subtitle {
+            color: #6b7280;
+            margin: 0 0 1.1rem;
+        }
+        .accent-card {
+            background: #f7f9fc;
+            border: 1px solid #e5e7eb;
+            border-left: 6px solid #004d98;
+            border-radius: 14px;
+            padding: 0.8rem 1rem;
+            margin: 0.25rem 0 0.9rem;
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+        }
+        .accent-title {
+            color: #004d98;
+            font-size: 0.78rem;
+            font-weight: 800;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            margin-bottom: 0.4rem;
+        }
+        .accent-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 0.24rem 0;
+            border-top: 1px solid rgba(0, 77, 152, 0.08);
+        }
+        .accent-row:first-of-type { border-top: 0; padding-top: 0; }
+        .accent-label { color: #6b7280; font-weight: 600; }
+        .accent-value { color: #1f2937; font-weight: 800; text-align: right; }
+        .compact-card-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem 0.55rem;
+        }
+        .compact-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.38rem 0.62rem;
+            border-radius: 999px;
+            background: #ffffff;
+            border: 1px solid #dbe4f0;
+            color: #1f2937;
+            font-size: 0.94rem;
+            line-height: 1.2;
+            white-space: nowrap;
+        }
+        .compact-badge strong {
+            color: #004d98;
+            font-weight: 800;
+        }
+        @media (max-width: 768px) {
+            .accent-row { flex-direction: column; gap: 0.15rem; }
+            .accent-value { text-align: left; }
+            .compact-badge { white-space: normal; }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_page_header() -> None:
+    st.markdown(
+        """
+        <h1 class="dashboard-title">FC Barcelona: Recruitment Decision Support System</h1>
+        <div class="dashboard-title-accent"></div>
+        <p class="dashboard-subtitle">
+            Support FC Barcelona recruitment decisions with transparent filtering, scenario summaries,
+            shortlist rankings, and simple tradeoff visuals.
+        </p>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_accent_card(title: str, rows: list[tuple[str, str]]) -> None:
+    row_html = "".join(
+        f'<div class="accent-row"><span class="accent-label">{html.escape(label)}</span>'
+        f'<span class="accent-value">{html.escape(value)}</span></div>'
+        for label, value in rows
+    )
+    st.markdown(
+        f"""
+        <div class="accent-card">
+            <div class="accent-title">{html.escape(title)}</div>
+            {row_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_compact_card(title: str, badges: list[str]) -> None:
+    badge_html = "".join(
+        f'<span class="compact-badge">{badge}</span>'
+        for badge in badges
+    )
+    st.markdown(
+        f"""
+        <div class="accent-card">
+            <div class="accent-title">{html.escape(title)}</div>
+            <div class="compact-card-grid">{badge_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def sync_widget_state(persistent_key: str, widget_key: str) -> None:
+    st.session_state[persistent_key] = st.session_state.get(widget_key)
+
+
 def render_summary(filtered_df: pd.DataFrame, total_players: int) -> None:
     matched_players = len(filtered_df)
     avg_score = filtered_df["smart_value_index"].mean() if matched_players else 0.0
@@ -237,75 +375,113 @@ def render_summary(filtered_df: pd.DataFrame, total_players: int) -> None:
     avg_recent_minutes = filtered_df["recent_minutes"].mean() if matched_players else 0.0
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Matched candidates", f"{matched_players}", f"of {total_players} ranked players")
-    col2.metric("Average Smart Value Index", f"{avg_score:.1f}")
+    col1.metric("Matched candidates", f"{matched_players}", f"out of {total_players} ranked players")
+    col2.metric("Average DSS Score", f"{avg_score:.1f}")
     col3.metric("Average market value", format_eur_millions(avg_value) if matched_players else "€0.0M")
     col4.metric("Average recent minutes", f"{avg_recent_minutes:.0f}")
 
 
 def render_visual_analysis(filtered_df: pd.DataFrame) -> None:
-    st.subheader("Value vs Score")
-    st.caption("The chart compares market value against the active Smart Value Index for the current evidence window.")
+    st.subheader("Market Value vs DSS Score")
+    st.caption("The chart compares market value in €M against the active DSS Score for the current evidence period.")
 
-    scatter_data = filtered_df[["market_value_eur", "smart_value_index", "position"]].dropna()
+    scatter_data = filtered_df[["market_value_eur", "smart_value_index", "position"]].dropna().copy()
     if not scatter_data.empty:
+        scatter_data["Market value (€M)"] = scatter_data["market_value_eur"] / 1_000_000
+        scatter_data["DSS Score"] = scatter_data["smart_value_index"]
         st.scatter_chart(
-            scatter_data,
-            x="market_value_eur",
-            y="smart_value_index",
+            scatter_data[["Market value (€M)", "DSS Score", "position"]],
+            x="Market value (€M)",
+            y="DSS Score",
             color="position",
             width="stretch",
         )
     else:
-        st.info("Not enough filtered data to draw the value vs score chart.")
+        st.info("Not enough filtered data to draw the Market Value vs DSS Score chart.")
+
+
+def render_shortlist_summary(shortlist_df: pd.DataFrame) -> None:
+    if shortlist_df.empty:
+        return
+
+    top_pick = shortlist_df.iloc[0]
+    best_value_pick = shortlist_df.sort_values(by=["value_score", "smart_value_index"], ascending=False).iloc[0]
+    most_reliable_pick = shortlist_df.sort_values(by=["reliability_score", "smart_value_index"], ascending=False).iloc[0]
+    render_compact_card(
+        "Recommended shortlist summary",
+        [
+            f"<strong>Top overall:</strong> {html.escape(top_pick['name'])} · DSS Score {top_pick['smart_value_index']:.1f}",
+            f"<strong>Best value:</strong> {html.escape(best_value_pick['name'])} · Value Score {best_value_pick['value_score']:.1f}",
+            f"<strong>Most reliable:</strong> {html.escape(most_reliable_pick['name'])} · Reliability {most_reliable_pick['reliability_score']:.1f}",
+        ],
+    )
 
 
 def render_shortlist(shortlist_df: pd.DataFrame, evidence_window: str) -> None:
     window_label = get_evidence_window_label(evidence_window)
-    st.subheader("Top Potential Players")
-    st.caption(f"Players are ordered by the active Smart Value Index using {window_label.lower()} evidence.")
+    st.subheader("Recommended Shortlist")
+    st.caption(f"Players are ordered by the active DSS Score using {window_label.lower()} evidence.")
 
     if shortlist_df.empty:
-        st.info("No players match the current filter settings. Try increasing budget or lowering the reliability level.")
+        st.info("No players match the current filter settings. Try increasing budget or lowering the minimum reliability.")
         return
 
-    display_columns = [
+    primary_columns = [
         "smart_value_index",
         "name",
         "position",
         "age",
-        "nationality",
         "club_name",
         "market_value_eur",
         "recent_minutes",
-        "goal_contributions",
-        "attacking_contribution_per_90",
         "production_score",
         "value_score",
         "reliability_score",
-        "discipline_score",
     ]
-    display_columns = [column for column in display_columns if column in shortlist_df.columns]
+    primary_columns = [column for column in primary_columns if column in shortlist_df.columns]
 
     st.dataframe(
-        shortlist_df[display_columns],
+        shortlist_df[primary_columns],
         hide_index=True,
         width="stretch",
         column_config={
-            "smart_value_index": st.column_config.NumberColumn("Smart Value Index", format="%.2f"),
+            "smart_value_index": st.column_config.NumberColumn("DSS Score", format="%.2f"),
             "age": st.column_config.NumberColumn("Age", format="%.1f"),
-            "nationality": st.column_config.TextColumn("Nationality"),
             "club_name": st.column_config.TextColumn("Current club"),
             "market_value_eur": st.column_config.NumberColumn("Market value (€)", format="€%,d"),
-            "recent_minutes": st.column_config.NumberColumn(f"Recent minutes ({window_label})", format="%d"),
-            "goal_contributions": st.column_config.NumberColumn("Goal contributions", format="%.0f"),
-            "attacking_contribution_per_90": st.column_config.NumberColumn("Contribution / 90", format="%.2f"),
+            "recent_minutes": st.column_config.NumberColumn(f"Recent playing time ({window_label})", format="%d"),
             "production_score": st.column_config.NumberColumn("Production", format="%.2f"),
             "value_score": st.column_config.NumberColumn("Value", format="%.2f"),
             "reliability_score": st.column_config.NumberColumn("Reliability", format="%.2f"),
-            "discipline_score": st.column_config.NumberColumn("Discipline", format="%.2f"),
         },
     )
+
+    with st.expander("Show detailed player metrics", expanded=False):
+        detail_columns = [
+            "name",
+            "nationality",
+            "goal_contributions",
+            "attacking_contribution_per_90",
+            "yellow_cards",
+            "red_cards",
+            "discipline_risk_per_90",
+            "discipline_score",
+        ]
+        detail_columns = [column for column in detail_columns if column in shortlist_df.columns]
+        st.dataframe(
+            shortlist_df[detail_columns],
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "nationality": st.column_config.TextColumn("Nationality"),
+                "goal_contributions": st.column_config.NumberColumn("Goal contributions", format="%.0f"),
+                "attacking_contribution_per_90": st.column_config.NumberColumn("Attacking contribution / 90", format="%.2f"),
+                "yellow_cards": st.column_config.NumberColumn("Yellow cards", format="%.0f"),
+                "red_cards": st.column_config.NumberColumn("Red cards", format="%.0f"),
+                "discipline_risk_per_90": st.column_config.NumberColumn("Discipline risk / 90", format="%.2f"),
+                "discipline_score": st.column_config.NumberColumn("Discipline", format="%.2f"),
+            },
+        )
 
 
 def render_similar_alternatives(df: pd.DataFrame, evidence_window: str, reliability_level: str, age_range: tuple[int, int]) -> None:
@@ -317,6 +493,24 @@ def render_similar_alternatives(df: pd.DataFrame, evidence_window: str, reliabil
 
     candidate_names = sorted(df["name"].dropna().unique())
 
+    st.session_state.setdefault("similar_target_player", None)
+    st.session_state.setdefault("similar_same_position", True)
+    st.session_state.setdefault("similar_max_value_ratio", 0.75)
+    st.session_state.setdefault("similar_min_similarity", 70)
+
+    if st.session_state["similar_target_player"] not in candidate_names:
+        st.session_state["similar_target_player"] = None
+        st.session_state.pop("similar_target_player_widget", None)
+
+    if "similar_target_player_widget" not in st.session_state:
+        st.session_state["similar_target_player_widget"] = st.session_state["similar_target_player"]
+    if "similar_same_position_widget" not in st.session_state:
+        st.session_state["similar_same_position_widget"] = st.session_state["similar_same_position"]
+    if "similar_max_value_ratio_widget" not in st.session_state:
+        st.session_state["similar_max_value_ratio_widget"] = st.session_state["similar_max_value_ratio"]
+    if "similar_min_similarity_widget" not in st.session_state:
+        st.session_state["similar_min_similarity_widget"] = st.session_state["similar_min_similarity"]
+
     control_col1, control_col2 = st.columns([2, 1])
 
     with control_col1:
@@ -325,34 +519,43 @@ def render_similar_alternatives(df: pd.DataFrame, evidence_window: str, reliabil
             options=candidate_names,
             index=None,
             placeholder="Choose a target player",
+            key="similar_target_player_widget",
+            on_change=sync_widget_state,
+            args=("similar_target_player", "similar_target_player_widget"),
         )
 
     with control_col2:
         same_position = st.checkbox(
             "Same position only",
-            value=True,
+            key="similar_same_position_widget",
+            on_change=sync_widget_state,
+            args=("similar_same_position", "similar_same_position_widget"),
         )
 
     filter_col1, filter_col2 = st.columns(2)
 
     with filter_col1:
         max_value_ratio = st.slider(
-            "Max value ratio",
+            "Maximum price compared to target",
             min_value=0.30,
             max_value=1.00,
-            value=0.75,
             step=0.05,
-            help="Candidate value must be below this ratio of the target player's market value.",
+            help="For example, 0.75 means alternatives must cost at most 75% of the target player's market value.",
+            key="similar_max_value_ratio_widget",
+            on_change=sync_widget_state,
+            args=("similar_max_value_ratio", "similar_max_value_ratio_widget"),
         )
 
     with filter_col2:
         min_similarity = st.slider(
-            "Min similarity",
+            "Minimum similarity",
             min_value=0,
             max_value=100,
-            value=70,
             step=5,
-            help="Minimum similarity score for a recommendation to stay on the list. Higher values return players whose profile is closer to the target.",
+            help="Higher values keep players whose profiles are closer to the target.",
+            key="similar_min_similarity_widget",
+            on_change=sync_widget_state,
+            args=("similar_min_similarity", "similar_min_similarity_widget"),
         )
 
     if target_player is None:
@@ -376,7 +579,7 @@ def render_similar_alternatives(df: pd.DataFrame, evidence_window: str, reliabil
         st.exception(exc)
         return
 
-    st.markdown("**Target player**")
+    st.markdown("**Target player profile**")
 
     target_display = pd.DataFrame(
         [
@@ -399,8 +602,8 @@ def render_similar_alternatives(df: pd.DataFrame, evidence_window: str, reliabil
         column_config={
             "club_name": st.column_config.TextColumn("Current club"),
             "market_value_eur": st.column_config.NumberColumn("Market value (€)", format="€%,d"),
-            "recent_minutes": st.column_config.NumberColumn(f"Recent minutes ({window_label})", format="%d"),
-            "smart_value_index": st.column_config.NumberColumn("Smart Value Index", format="%.2f"),
+            "recent_minutes": st.column_config.NumberColumn(f"Recent playing time ({window_label})", format="%d"),
+            "smart_value_index": st.column_config.NumberColumn("DSS Score", format="%.2f"),
             "age": st.column_config.NumberColumn("Age", format="%.1f"),
         },
     )
@@ -410,10 +613,23 @@ def render_similar_alternatives(df: pd.DataFrame, evidence_window: str, reliabil
     if alternatives.empty:
         threshold = get_reliability_threshold(evidence_window, reliability_level)
         st.info(
-            f"No similar alternatives found with {window_label.lower()} evidence and {reliability_level.lower()} reliability ({threshold:,}+ recent minutes). "
-            "Try increasing Max value ratio, lowering Min similarity, or allowing different positions."
+            f"No cheaper similar alternatives found with {window_label.lower()} evidence and {reliability_level.lower()} minimum reliability ({threshold:,}+ recent minutes). "
+            "Try increasing Maximum price compared to target, lowering Minimum similarity, or allowing different positions."
         )
         return
+
+    top_alternative = alternatives.iloc[0]
+    render_accent_card(
+        "Recommendation summary",
+        [
+            ("Found alternatives", f"{len(alternatives)} cheaper options for {target['name']}"),
+            (
+                "Top match",
+                f"{top_alternative['name']} — Similarity {top_alternative['similarity_score']:.2f} | "
+                f"Affordability {top_alternative['affordability_score']:.2f} | Alternative Score {top_alternative['alternative_score']:.2f}",
+            ),
+        ],
+    )
 
     display_columns = [
         "smart_value_index",
@@ -434,10 +650,10 @@ def render_similar_alternatives(df: pd.DataFrame, evidence_window: str, reliabil
         hide_index=True,
         width="stretch",
         column_config={
-            "smart_value_index": st.column_config.NumberColumn("Smart Value Index", format="%.2f"),
+            "smart_value_index": st.column_config.NumberColumn("DSS Score", format="%.2f"),
             "club_name": st.column_config.TextColumn("Current club"),
             "market_value_eur": st.column_config.NumberColumn("Market value (€)", format="€%,d"),
-            "recent_minutes": st.column_config.NumberColumn(f"Recent minutes ({window_label})", format="%d"),
+            "recent_minutes": st.column_config.NumberColumn(f"Recent playing time ({window_label})", format="%d"),
             "similarity_score": st.column_config.NumberColumn("Similarity", format="%.2f"),
             "alternative_score": st.column_config.NumberColumn("Alternative Score", format="%.2f"),
             "affordability_score": st.column_config.NumberColumn("Affordability", format="%.2f"),
@@ -447,10 +663,8 @@ def render_similar_alternatives(df: pd.DataFrame, evidence_window: str, reliabil
 
 
 st.set_page_config(page_title="FC Barcelona DSS", layout="wide")
-st.title("FC Barcelona: Recruitment Decision Support System")
-st.markdown(
-    "Support recruitment decisions with transparent filtering, shortlist indicators, and simple tradeoff visuals."
-)
+render_brand_styles()
+render_page_header()
 
 try:
     df = normalize_data(load_data())
@@ -466,23 +680,43 @@ if df.empty:
     st.warning("No valid rows found in `mart.player_ranking` after data preparation.")
     st.stop()
 
+st.sidebar.header("Navigation")
 navigation = st.sidebar.radio(
     "Go to",
     ["Potential Shortlist", "Similar Alternatives"],
+    label_visibility="collapsed",
 )
 
-st.sidebar.header("Decision context")
+st.sidebar.header("Scenario settings")
 evidence_window = st.sidebar.radio(
-    "Evidence window",
+    "Performance evidence period",
     options=get_evidence_window_options(),
     index=get_evidence_window_options().index(DEFAULT_EVIDENCE_WINDOW),
     format_func=get_evidence_window_label,
 )
 reliability_level = st.sidebar.radio(
-    "Reliability level",
+    "Minimum reliability",
     options=get_reliability_level_options(),
     index=get_reliability_level_options().index(DEFAULT_RELIABILITY_LEVEL),
 )
+
+window_label = get_evidence_window_label(evidence_window)
+min_recent_minutes = get_reliability_threshold(evidence_window, reliability_level)
+
+evidence_df = prepare_evidence_view(df, evidence_window)
+
+max_budget = None
+positions: list[str] = []
+if navigation == "Potential Shortlist":
+    budget_defaults = build_budget_defaults(evidence_df)
+    max_budget = st.sidebar.slider(
+        "Maximum budget (€M)",
+        budget_defaults["budget_min_m"],
+        budget_defaults["budget_max_m"],
+        budget_defaults["budget_default_m"],
+    )
+
+st.sidebar.header("Player filters")
 age_range = st.sidebar.slider(
     "Age range",
     min_value=16,
@@ -491,21 +725,7 @@ age_range = st.sidebar.slider(
     step=1,
 )
 
-window_label = get_evidence_window_label(evidence_window)
-min_recent_minutes = get_reliability_threshold(evidence_window, reliability_level)
-
-evidence_df = prepare_evidence_view(df, evidence_window)
-
 if navigation == "Potential Shortlist":
-    budget_defaults = build_budget_defaults(evidence_df)
-
-    max_budget = st.sidebar.slider(
-        "Max Budget (€ Millions)",
-        budget_defaults["budget_min_m"],
-        budget_defaults["budget_max_m"],
-        budget_defaults["budget_default_m"],
-    )
-
     positions = st.sidebar.multiselect(
         "Position",
         options=sorted(evidence_df["position"].dropna().unique()),
@@ -516,32 +736,40 @@ if navigation == "Potential Shortlist":
     shortlist_df = filtered_df.sort_values(by="smart_value_index", ascending=False).head(SHORTLIST_SIZE)
 
     st.subheader("Dashboard Overview")
-    st.caption(
-        f"Current scenario: players valued at or below {format_eur_millions(max_budget * 1_000_000)}, "
-        f"using {window_label.lower()} evidence, {reliability_level.lower()} reliability, and age {age_range[0]}–{age_range[1]}."
-    )
+    with st.expander("How to read this dashboard", expanded=False):
+        st.markdown(
+            "- **Maximum budget** limits the shortlist to financially realistic targets.\n"
+            f"- **Evidence period** chooses which recent seasons count: `{get_evidence_window_label('last_season')}`, `{get_evidence_window_label('last_3_seasons')}`, or `{get_evidence_window_label('last_5_seasons')}`.\n"
+            f"- **Minimum reliability** maps to a minimum recent-minute threshold for the selected period: `{reliability_level.title()}` = `{min_recent_minutes:,}+` minutes.\n"
+            f"- **Age range** limits the shortlist to players between `{age_range[0]}` and `{age_range[1]}` years old.\n"
+            "- **DSS Score** is the final ranking score shown in this dashboard.\n"
+            "- **Formula**: `DSS Score = 40% Production + 35% Value + 20% Reliability + 5% Discipline`.\n"
+            "- **Production** = attacking contribution per 90 + goal contributions.\n"
+            "- **Value** = value efficiency + value retention ratio.\n"
+            "- **Reliability** = recent minutes + recent appearances in the selected evidence period.\n"
+            "- **Discipline** = discipline risk per 90 + yellow/red cards.\n"
+            "- The chart compares market value against the active DSS Score."
+        )
 
     render_summary(filtered_df, len(evidence_df))
 
-    with st.expander("How to read this dashboard", expanded=False):
-        st.markdown(
-            "- **Budget** narrows the shortlist to financially realistic targets.\n"
-            f"- **Evidence window** chooses which recent seasons count: `{get_evidence_window_label('last_season')}`, `{get_evidence_window_label('last_3_seasons')}`, or `{get_evidence_window_label('last_5_seasons')}`.\n"
-            f"- **Reliability level** maps to a minimum recent-minute threshold for the selected window: `{reliability_level}` = `{min_recent_minutes:,}+` minutes.\n"
-            f"- **Age range** limits the shortlist to players between `{age_range[0]}` and `{age_range[1]}` years old.\n"
-            "- **Smart Value Index** is the final ranking score shown in this dashboard.\n"
-            "- **Formula**: `Smart Value Index = 40% Production + 35% Value + 20% Reliability + 5% Discipline`.\n"
-            "- **Production** = attacking contribution per 90 + goal contributions.\n"
-            "- **Value** = value efficiency + value retention ratio.\n"
-            "- **Reliability** = recent minutes + recent appearances in the selected evidence window.\n"
-            "- **Discipline** = discipline risk per 90 + yellow/red cards.\n"
-            "- The chart compares market value against the active Smart Value Index."
-        )
+    render_compact_card(
+        "Current scenario",
+        [
+            f"<strong>Position:</strong> {html.escape(', '.join(positions) if positions else 'All positions')}",
+            f"<strong>Age range:</strong> {age_range[0]}–{age_range[1]}",
+            f"<strong>Budget:</strong> ≤ {html.escape(format_eur_millions(max_budget * 1_000_000))}",
+            f"<strong>Evidence period:</strong> {html.escape(window_label)}",
+            f"<strong>Reliability:</strong> {html.escape(reliability_level.title())} ({min_recent_minutes:,}+ mins)",
+        ],
+    )
+
+    render_shortlist_summary(shortlist_df)
 
     if filtered_df.empty:
         st.warning(
             "No players match the current recruitment scenario. "
-            "Try increasing the budget or lowering the reliability level."
+            "Try increasing the budget or lowering the minimum reliability."
         )
         st.stop()
 
@@ -549,9 +777,9 @@ if navigation == "Potential Shortlist":
     render_visual_analysis(filtered_df)
 
 else:
-    st.subheader("Similar Alternative Recommendation")
+    st.subheader("Cheaper Similar Alternatives")
     st.caption(
-        f"Choose a target player and the system recommends players with similar performance profiles using {window_label.lower()} evidence."
+        f"Select a target player to find cheaper similar alternatives using {window_label.lower()} evidence and the current reliability setting."
     )
 
     with st.expander("How to read this feature", expanded=False):
@@ -559,9 +787,9 @@ else:
             "- **Target player** is the player you want to replace or benchmark.\n"
             "- **Similarity** measures how close another player's profile is to the target.\n"
             "- **Affordability** rewards players that are much cheaper than the target.\n"
-            f"- **Recent minutes** come from the selected {window_label.lower()} evidence window.\n"
-            "- **Smart Value Index** brings in the overall ranking score from the dashboard.\n"
-            "- **Alternative Score** combines Similarity, Affordability, and Smart Value Index."
+            f"- **Recent playing time** comes from the selected {window_label.lower()} evidence period.\n"
+            "- **DSS Score** brings in the overall ranking score from the dashboard.\n"
+            "- **Alternative Score** = 55% Similarity + 25% Affordability + 20% DSS Score."
         )
 
     render_similar_alternatives(evidence_df, evidence_window, reliability_level, age_range)
