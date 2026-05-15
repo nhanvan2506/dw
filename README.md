@@ -96,15 +96,15 @@ App URL:
 - http://localhost:8501
 
 ## Dashboard flow
-The Streamlit dashboard is organized to support a simple FC Barcelona recruitment decision flow:
-- **Dashboard overview** — shows the current scenario summary, shortlist summary indicators, and the recommended shortlist
-- **Scenario settings** — sidebar filters for evidence period and minimum reliability
-- **Player filters** — sidebar filters for age and, on the shortlist page, budget and position
-- **Visual analysis** — one Market Value vs DSS Score chart for the active evidence period
-- **Recommended shortlist** — the final ranked table with core decision columns first and a detailed metrics expander
-- **Cheaper Similar Alternatives** — target player, similarity filters, a result summary, and recommended cheaper replacements, with the current target and page filters preserved across page switches during the same session
+The Streamlit dashboard is organized to support a simple recruitment decision flow:
+- **Potential Shortlist** — the main page starts with editable scenario controls in the page body, followed by KPI summaries, a methodology explainer, recommendation cards, a ranked shortlist table, and a value-opportunity chart
+- **Scenario controls** — evidence period, reliability, budget, age range, and position are configured directly on the shortlist page so the active recruitment scenario is always visible near the decision output
+- **Recommendation summary** — three cards highlight the top overall, best value, and most reliable shortlist candidates and can focus the corresponding player in the evidence views
+- **Priority targets table** — the default table keeps the comparison shortlist-first with rank, player identity, market value, DSS, value, and reliability prioritized before secondary metrics
+- **Value opportunity map** — the chart shows the wider filtered market in the background and emphasizes the shortlisted players so the score-versus-price tradeoff is easier to explain in demos
+- **Cost-Efficient Alternatives** — the second workflow now starts with scenario context, then target selection and replacement constraints, followed by a target summary, one featured cheaper replacement, and a ranked comparison table focused on substitute comparisons
 
-This keeps the app easy to demo while still showing clear decision-support logic from the mart. Both pages include short explanation text so the DSS Score and alternative-score rationale can be explained quickly in a presentation, and the UI uses restrained Barcelona-inspired accents on custom cards and headings without recoloring the whole dashboard.
+This keeps the app easy to demo while still showing clear decision-support logic from the mart. Both pages now use a neutral financial-style theme and a stronger information hierarchy so the DSS logic is easier to explain to a course audience without relying on club-themed styling.
 
 ## Daily restart flow
 If data/model SQL changes:
